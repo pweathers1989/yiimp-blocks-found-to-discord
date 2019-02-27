@@ -36,60 +36,6 @@ async def parse_events(html, queue, share_state_d):
             share_state_d['previous_poll_dt'] = dt
 
 
-async def refresh_stocks_exchange_markets(url, d_markets):
-
-    logger = logging.getLogger('refresh_st_exc_markets')
-
-    try:
-        while True:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url) as resp:
-                        resp.raise_for_status()
-                        d_resp = await resp.json()
-                        new_d_markets = { tuple(x['market_name'].split('_')): float(x['buy']) for x in d_resp }
-                        # Keep reference
-                        d_markets.update(new_d_markets)
-                logger.info('Refreshed')
-                await asyncio.sleep(60)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.exception('Exception occurred: %s: %s', e.__class__.__name__, e)
-                await asyncio.sleep(60)
-
-    except asyncio.CancelledError:
-        logger.info('Exiting on cancel signal')
-        return
-
-
-async def refresh_cryptopia_markets(url, d_markets):
-
-    logger = logging.getLogger('refresh_cryptopia_markets')
-
-    try:
-        while True:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url) as resp:
-                        resp.raise_for_status()
-                        d_resp = await resp.json()
-                        new_d_markets = { tuple(x['Label'].split('/')): float(x['LastPrice']) for x in d_resp['Data'] }
-                        # Keep reference
-                        d_markets.update(new_d_markets)
-                logger.info('Refreshed')
-                await asyncio.sleep(60)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.exception('Exception occurred: %s: %s', e.__class__.__name__, e)
-                await asyncio.sleep(60)
-
-    except asyncio.CancelledError:
-        logger.info('Exiting on cancel signal')
-        return
-
-
 async def poll_yiimp_events(url, queue):
 
     logger = logging.getLogger('poll_yiimp_events')
@@ -123,7 +69,7 @@ async def poll_yiimp_events(url, queue):
         return
 
 
-async def post_events_discord(url, queue, d_markets_stocks_exchange, d_markets_cryptopia):
+async def post_events_discord(url, queue):
 
     logger = logging.getLogger('post_events_discord')
 
@@ -133,25 +79,7 @@ async def post_events_discord(url, queue, d_markets_stocks_exchange, d_markets_c
             try:
                 dt, coin_name, coin_amount = await queue.get()
 
-                message = '%f %s found at %s UTC' % (coin_amount, coin_name, dt)
-
-                # Attempt to convert coin value in BTC
-                if (coin_name, 'BTC') in d_markets_cryptopia:
-                    coin_amount_btc = coin_amount * d_markets_cryptopia[(coin_name, 'BTC')]
-                    message += ' (Cryptopia: %fBTC)' % coin_amount_btc
-                elif (coin_name, 'BTC') in d_markets_stocks_exchange:
-                    coin_amount_btc = coin_amount * d_markets_stocks_exchange[(coin_name, 'BTC')]
-                    message += ' (StocksExc: %fBTC)' % coin_amount_btc
-                else:
-                    coin_amount_btc = None
-
-                # Attempt to convert BTC coin value in USDT
-                if coin_amount_btc is not None:
-                    if ('BTC', 'USDT') in d_markets_cryptopia:
-                         coin_amount_usdt = coin_amount_btc * d_markets_cryptopia[('BTC', 'USDT')]
-                         message += ' (Cryptopia: %fUSDT)' % coin_amount_usdt
-                    else:
-                        coin_amount_btc = None
+                message = ' :boom: https://Altcoinminers.us/ dug up %f %s found at %s EST :boom: ' % (coin_amount, coin_name, dt)
 
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, json={ 'content': message }) as resp:
@@ -177,8 +105,6 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(levelname)-8s [%(name)-25s] %(message)s', stream=sys.stdout)
     logger = logging.getLogger('main')
 
-    d_markets_stocks_exchange = dict()
-    d_markets_cryptopia = dict()
 
     def cli_arguments():
         parser = argparse.ArgumentParser(description='Service polling YIIMP pool to output found blocks on Discord (with currency conversion)')
@@ -190,26 +116,17 @@ if __name__ == '__main__':
 
     pool_url = config.pool_url
     discord_url = config.discord_url
-    stocks_exchange_url = 'https://stocks.exchange/api2/markets'
-    cryptopia_url = 'https://www.cryptopia.co.nz/api/GetMarkets'
 
     try:
-        logger.info('Starting refresh_stock_exchange_markets')
-        refresh_stocks_exchange_markets_coro = loop.create_task(refresh_stocks_exchange_markets(stocks_exchange_url, d_markets_stocks_exchange))
-
-        logger.info('Starting refresh_cryptopia_markets')
-        refresh_cryptopia_markets_coro = loop.create_task(refresh_cryptopia_markets(cryptopia_url, d_markets_cryptopia))
 
         logger.info('Starting poll_yiimp_events coroutine')
         poll_yiimp_events_coro = loop.create_task(poll_yiimp_events(pool_url, queue))
 
         logger.info('Starting post_events_discord coroutine')
-        post_events_discord_coro = loop.create_task(post_events_discord(discord_url, queue, d_markets_stocks_exchange, d_markets_cryptopia))
+        post_events_discord_coro = loop.create_task(post_events_discord(discord_url, queue))
 
         loop.run_until_complete(asyncio.gather(poll_yiimp_events_coro,
                                                post_events_discord_coro,
-                                               refresh_cryptopia_markets_coro,
-                                               refresh_stocks_exchange_markets_coro,
                                               ))
 
     except KeyboardInterrupt:
